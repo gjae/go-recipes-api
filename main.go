@@ -28,7 +28,7 @@ func init() {
 	recipes = make([]Recipe, 0)
 	file, err := os.ReadFile("recipes.json")
 	if err != nil {
-		fmt.Errorf(err.Error())
+		fmt.Println(err)
 		return
 	}
 	_ = json.Unmarshal([]byte(file), &recipes)
@@ -124,6 +124,26 @@ func SearchRecipeHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, listOfRecipes)
 }
 
+func SearchRecipeByID(c *gin.Context) {
+	id := c.Param("id")
+	index := -1
+
+	for i := 0; i < len(recipes); i++ {
+		if recipes[i].ID == id {
+			index = i
+		}
+	}
+
+	if index == -1 {
+		c.JSON(http.StatusNotFound, gin.H{
+			"message": "Resource not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, recipes[index])
+}
+
 func main() {
 	router := gin.Default()
 
@@ -132,6 +152,7 @@ func main() {
 	router.PUT("/recipes/:id", UpdateRecipeHandler)
 	router.DELETE("/recipes/:id", DeleteRecippeHandler)
 	router.GET("/recipes/search", SearchRecipeHandler)
+	router.GET("/recipes/:id", SearchRecipeByID)
 
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
