@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 	// Generador de IDs únicos
 
 	"github.com/gin-gonic/gin" // Framework web
+	"github.com/gjae/go-recipes-api/handlers"
+	"github.com/gjae/go-recipes-api/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,42 +20,17 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
-// Recipe define la estructura de una receta culinaria
-type Recipe struct {
-	ID           string    `json:"id" bson:"_id"`                    // ID único generado con xid
-	Name         string    `json:"name" bson:"name"`                 // Nombre de la receta (ej: "Pasta Carbonara")
-	Tags         []string  `json:"tags" bson:"tags"`                 // Categorías (ej: ["italian", "pasta"])
-	Ingredients  []string  `json:"ingredients" bson:"ingredients"`   // Lista de ingredientes necesarios
-	Instructions []string  `json:"instructions" bson:"instructions"` // Pasos para preparar la receta
-	PublishedAt  time.Time `json:"publishedAt" bson:"created"`       // Fecha de creación/actualización
-}
-
 // Variables globales
 var (
-	recipes []Recipe        // Almacenamiento en memoria de las recetas
-	ctx     context.Context // Contexto para operaciones con MongoDB
-	err     error           // Variable para manejo de errores
-	client  *mongo.Client   // Cliente de MongoDB
+	ctx    context.Context // Contexto para operaciones con MongoDB
+	err    error           // Variable para manejo de errores
+	client *mongo.Client   // Cliente de MongoDB
 )
+
+var recipeHandler *handlers.RecipeHandler
 
 // init se ejecuta al iniciar la aplicación
 func init() {
-	// Inicializar slice de recetas
-	recipes = make([]Recipe, 0)
-
-	// Cargar recetas desde archivo JSON
-	file, err := os.ReadFile("recipes.json")
-	if err != nil {
-		fmt.Println("Error al leer archivo recipes.json:", err)
-		return
-	}
-
-	// Parsear contenido JSON al slice de recetas
-	if err := json.Unmarshal(file, &recipes); err != nil {
-		fmt.Println("Error al parsear JSON:", err)
-		return
-	}
-
 	// Configurar contexto para MongoDB
 	ctx = context.Background()
 
@@ -68,39 +44,20 @@ func init() {
 	if err = client.Ping(context.TODO(), readpref.Primary()); err != nil {
 		log.Fatal("Error al hacer ping a MongoDB:", err)
 	}
-	log.Println("Conexión a MongoDB establecida correctamente")
-
-	// Preparar datos para inserción masiva
-	var listOfRecipes []interface{}
-	for _, recipe := range recipes {
-		listOfRecipes = append(listOfRecipes, recipe)
-	}
-
-	// Verificar si ya se cargaron los datos previamente
-	if _, err := os.Stat(".data_loaded"); err == nil {
-		log.Println("Los datos ya fueron cargados previamente")
-		return
-	}
-
-	// Insertar recetas en la colección de MongoDB
 	collection := client.Database(os.Getenv("MONGO_DATABASE")).Collection("recipes")
-	insertManyResult, err := collection.InsertMany(ctx, listOfRecipes)
-	if err != nil {
-		log.Fatal("Error al insertar recetas en MongoDB:", err)
-	}
-
-	log.Printf("Se insertaron %d recetas en MongoDB\n", len(insertManyResult.InsertedIDs))
 
 	// Crear archivo marcador para evitar inserción duplicada
 	if _, err := os.Create(".data_loaded"); err != nil {
 		log.Println("Error al crear archivo .data_loaded:", err)
 	}
+
+	recipeHandler = handlers.NewRecipeHandler(ctx, collection)
 }
 
 // NewRecipeHandler maneja la creación de nuevas recetas
 func NewRecipeHandler(c *gin.Context) {
 	collection := client.Database(os.Getenv("MONGO_DATABASE")).Collection("recipes")
-	var recipe Recipe
+	var recipe models.Recipe
 
 	if err := c.ShouldBindJSON(&recipe); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -120,36 +77,11 @@ func NewRecipeHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, recipe)
 }
 
-// ListRecipeHandler devuelve todas las recetas existentes
-func ListRecipeHandler(c *gin.Context) {
-	collection := client.Database(os.Getenv("MONGO_DATABASE")).Collection("recipes")
-	cur, err := collection.Find(ctx, bson.M{})
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	defer cur.Close(ctx)
-
-	recipes := make([]Recipe, 0)
-
-	for cur.Next(ctx) {
-		var recipe Recipe
-		cur.Decode(&recipe)
-		recipes = append(recipes, recipe)
-	}
-
-	c.JSON(http.StatusOK, recipes)
-}
-
 // UpdateRecipeHandler actualiza una receta existente
 func UpdateRecipeHandler(c *gin.Context) {
 	// Obtener ID de los parámetros de la URL
 	id := c.Param("id")
-	var recipe Recipe
+	var recipe models.Recipe
 
 	collection := client.Database(os.Getenv("MONGO_DATABASE")).Collection("recipes")
 	objectId, _ := primitive.ObjectIDFromHex(id)
@@ -177,7 +109,7 @@ func UpdateRecipeHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Recipe has been updated"})
+	c.JSON(http.StatusOK, gin.H{"message": "models.Recipe has been updated"})
 }
 
 // DeleteRecipeHandler elimina una receta (Nota: Corregir nombre de función - typo en "DeleteRecippeHandler")
@@ -193,14 +125,14 @@ func DeleteRecipeHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Recipe has been deleted"})
+	c.JSON(http.StatusOK, gin.H{"message": "models.Recipe has been deleted"})
 }
 
 // SearchRecipeHandler busca recetas por etiqueta
 func SearchRecipeHandler(c *gin.Context) {
 	// Obtener parámetro 'tag' de la query string
 	tag := c.Query("tag")
-	listOfRecipes := make([]Recipe, 0)
+	listOfRecipes := make([]models.Recipe, 0)
 	collection := client.Database(os.Getenv("MONGO_DATABASE")).Collection("recipes")
 	filter := bson.M{"tags": bson.M{"$in": []string{tag}}}
 
@@ -211,7 +143,7 @@ func SearchRecipeHandler(c *gin.Context) {
 	}
 	defer cursor.Close(ctx)
 
-	var recipe Recipe
+	var recipe models.Recipe
 	for cursor.Next(context.TODO()) {
 		cursor.Decode(&recipe)
 		listOfRecipes = append(listOfRecipes, recipe)
@@ -223,7 +155,7 @@ func SearchRecipeHandler(c *gin.Context) {
 // SearchRecipeByID busca una receta por su ID
 func SearchRecipeByID(c *gin.Context) {
 	id := c.Param("id")
-	var recipe Recipe
+	var recipe models.Recipe
 	collection := client.Database(os.Getenv("MONGO_DATABASE")).Collection("recipes")
 	objectId, _ := primitive.ObjectIDFromHex(id)
 
@@ -244,12 +176,12 @@ func main() {
 	router := gin.Default()
 
 	// Configurar rutas para el CRUD de recetas
-	router.POST("/recipes", NewRecipeHandler)          // Crear
-	router.GET("/recipes", ListRecipeHandler)          // Listar
-	router.PUT("/recipes/:id", UpdateRecipeHandler)    // Actualizar
-	router.DELETE("/recipes/:id", DeleteRecipeHandler) // Eliminar
-	router.GET("/recipes/search", SearchRecipeHandler) // Buscar por tag
-	router.GET("/recipes/:id", SearchRecipeByID)       // Obtener por ID
+	router.POST("/recipes", NewRecipeHandler)               // Crear
+	router.GET("/recipes", recipeHandler.ListRecipeHandler) // Listar
+	router.PUT("/recipes/:id", UpdateRecipeHandler)         // Actualizar
+	router.DELETE("/recipes/:id", DeleteRecipeHandler)      // Eliminar
+	router.GET("/recipes/search", SearchRecipeHandler)      // Buscar por tag
+	router.GET("/recipes/:id", SearchRecipeByID)            // Obtener por ID
 
 	// Ruta de prueba
 	router.GET("/", func(c *gin.Context) {
