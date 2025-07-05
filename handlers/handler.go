@@ -2,47 +2,67 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gjae/go-recipes-api/models"
+	"github.com/go-redis/redis"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type RecipeHandler struct {
-	collection *mongo.Collection
-	ctx        context.Context
+	collection  *mongo.Collection
+	ctx         context.Context
+	redisClient *redis.Client
 }
 
-func NewRecipeHandler(ctx context.Context, collection *mongo.Collection) *RecipeHandler {
+func NewRecipeHandler(ctx context.Context, collection *mongo.Collection, redisClient *redis.Client) *RecipeHandler {
 	return &RecipeHandler{
-		collection: collection,
-		ctx:        ctx,
+		collection:  collection,
+		ctx:         ctx,
+		redisClient: redisClient,
 	}
+}
+
+func (handler *RecipeHandler) MakePing() {
+	status := handler.redisClient.Ping()
+	fmt.Println("Redis status ... ", status)
 }
 
 func (handler *RecipeHandler) ListRecipeHandler(c *gin.Context) {
-	cur, err := handler.collection.Find(handler.ctx, bson.M{})
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	defer cur.Close(handler.ctx)
-
+	val, err := handler.redisClient.Get("recipes").Result()
 	recipes := make([]models.Recipe, 0)
+	if err == redis.Nil {
+		cur, err := handler.collection.Find(handler.ctx, bson.M{})
 
-	for cur.Next(handler.ctx) {
-		var recipe models.Recipe
-		cur.Decode(&recipe)
-		recipes = append(recipes, recipe)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		defer cur.Close(handler.ctx)
+
+		for cur.Next(handler.ctx) {
+			var recipe models.Recipe
+			cur.Decode(&recipe)
+			recipes = append(recipes, recipe)
+		}
+		data, _ := json.Marshal(recipes)
+		handler.redisClient.Set("recipes", string(data), 0)
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	} else {
+		log.Print("Reques to redis")
+		json.Unmarshal([]byte(val), &recipes)
 	}
 
 	c.JSON(http.StatusOK, recipes)
@@ -66,6 +86,7 @@ func (handler *RecipeHandler) NewRecipeHandler(c *gin.Context) {
 		return
 	}
 
+	handler.redisClient.Del("recipes")
 	c.JSON(http.StatusCreated, recipe)
 }
 
