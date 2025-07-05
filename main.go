@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin" // Framework web
 	"github.com/gjae/go-recipes-api/handlers"
+	"github.com/go-redis/redis"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
@@ -25,6 +26,7 @@ var recipeHandler *handlers.RecipeHandler
 
 // init se ejecuta al iniciar la aplicación
 func init() {
+
 	// Configurar contexto para MongoDB
 	ctx = context.Background()
 
@@ -45,7 +47,12 @@ func init() {
 		log.Println("Error al crear archivo .data_loaded:", err)
 	}
 
-	recipeHandler = handlers.NewRecipeHandler(ctx, collection)
+	recipeHandler = handlers.NewRecipeHandler(ctx, collection, redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	}))
+	recipeHandler.MakePing()
 }
 
 // main configura el servidor HTTP y las rutas
