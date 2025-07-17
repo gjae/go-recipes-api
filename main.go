@@ -7,6 +7,8 @@ import (
 
 	// Generador de IDs únicos
 
+	"github.com/gin-contrib/sessions"
+	redisStore "github.com/gin-contrib/sessions/redis"
 	"github.com/gin-gonic/gin" // Framework web
 	"github.com/gjae/go-recipes-api/handlers"
 	"github.com/go-redis/redis"
@@ -22,7 +24,8 @@ var (
 	client *mongo.Client   // Cliente de MongoDB
 )
 
-var recipeHandler *handlers.RecipeHandler
+var recipeHandler *handlers.RecipeHandler // Handler para las recetas
+var authHandler *handlers.AuthHandler
 
 // init se ejecuta al iniciar la aplicación
 func init() {
@@ -47,35 +50,56 @@ func init() {
 		log.Println("Error al crear archivo .data_loaded:", err)
 	}
 
+	// Inicializar el handler de recetas con la conexión a la base de datos y Redis
 	recipeHandler = handlers.NewRecipeHandler(ctx, collection, redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
 		DB:       0,
 	}))
+	// Inicializar el handler de autenticación con la conexión a la base de datos
+	authHandler = handlers.NewAuthHandler(client.Database("MONGO_DATABASE").Collection("users"), ctx)
 	recipeHandler.MakePing()
 }
 
-// main configura el servidor HTTP y las rutas
+// main configura el servidor HTTP y define las rutas de la API
 func main() {
+
 	// Crear enrutador Gin con middleware por defecto
+	store, _ := redisStore.NewStore(10, "tcp", "localhost:6379", "", "")
 	router := gin.Default()
 
-	// Configurar rutas para el CRUD de recetas
-	router.POST("/recipes", recipeHandler.NewRecipeHandler)          // Crear
-	router.GET("/recipes", recipeHandler.ListRecipeHandler)          // Listar
-	router.PUT("/recipes/:id", recipeHandler.UpdateRecipeHandler)    // Actualizar
-	router.DELETE("/recipes/:id", recipeHandler.DeleteRecipeHandler) // Eliminar
+	router.RunTLS(":443", "certs/localhost.crt", "certs/localhost.key")
+	// Configurar el almacenamiento de sesiones con Redis
+	router.Use(sessions.Sessions("recipes_api", store))
+	// Crear un grupo de rutas autorizadas
+
+	authorized := router.Group("/")
+
+	//authorized.Use(authHandler.AuthMiddleware())
+	authorized.Use(authHandler.AuthMiddleware())
+	{
+		authorized.POST("/recipes", recipeHandler.NewRecipeHandler)          // Crear
+		authorized.GET("/recipes", recipeHandler.ListRecipeHandler)          // Listar
+		authorized.PUT("/recipes/:id", recipeHandler.UpdateRecipeHandler)    // Actualizar
+		authorized.DELETE("/recipes/:id", recipeHandler.DeleteRecipeHandler) // Eliminar
+	}
+	// Configurar rutas para la búsqueda de recetas
 	router.GET("/recipes/search", recipeHandler.SearchRecipeHandler) // Buscar por tag
 	router.GET("/recipes/:id", recipeHandler.SearchRecipeByID)       // Obtener por ID
 
-	// Ruta de prueba
+	// Configurar rutas para la autenticación
+	router.POST("/signin", authHandler.SignInHandler)
+	router.POST("/refresh", authHandler.RefreshTokenHandler)
+
+	// Definir una ruta de prueba en la raíz
 	router.GET("/", func(c *gin.Context) {
+		// Responder con un mensaje JSON indicando que la API está funcionando
+
 		c.JSON(200, gin.H{
 			"message": "API de Recetas funcionando",
 		})
 	})
 
 	// Iniciar servidor en el puerto por defecto (8080)
-	log.Println("Servidor iniciado en http://localhost:8080")
-	router.Run()
+	router.RunTLS(":8005", "certs/localhost.crt", "certs/localhost.key")
 }
