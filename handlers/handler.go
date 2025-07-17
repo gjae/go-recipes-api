@@ -87,7 +87,6 @@ func (handler *RecipeHandler) ListRecipeHandler(c *gin.Context) {
 // NewRecipeHandler maneja la creación de una nueva receta
 func (handler *RecipeHandler) NewRecipeHandler(c *gin.Context) {
 	var recipe models.Recipe
-
 	// Limpia la caché de recetas después de la operación
 	defer func(redisClient *redis.Client) {
 		go utils.CleanCacheById(redisClient, "recipes")
